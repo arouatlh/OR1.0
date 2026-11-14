@@ -141,3 +141,11 @@ async def test_astronauts_and_mode_toggle(client):
     assert summary_data["astronaut"]["mode"] == "eva"
     assert "stats_5min" in summary_data
     assert "open_alerts" in summary_data
+
+    # Verify telemetry history endpoint
+    resp_tel = await client.get("/api/v1/astronauts/astro-a/telemetry?limit=20&offset=0&order=DESC")
+    assert resp_tel.status_code == 200
+    assert "data" in resp_tel.json()
+    assert "count" in resp_tel.json()
+
+
