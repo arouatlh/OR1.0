@@ -1,41 +1,74 @@
 from collections.abc import Sequence
 
+from app.analyzer import analyze
 from app.domain.models import Sample
 from app.ml.features import extract_features
 from app.ml.predictor import AssessmentResult
 
 
 class DefaultPredictor:
-    """Production ML Predictor for in-process anomaly assessment.
-    Fast, CPU-bound, free of I/O."""
+    """Adapts the rules-based analyzer to the backend Predictor interface."""
 
-    version = "v1.0-anomaly-detector"
+    version = "rules_v1"
 
     def predict(self, window: Sequence[Sample]) -> AssessmentResult:
-        feats = extract_features(window)
+        # Keep samples that contain the two required analyzer measurements.
+        valid_samples = [
+            sample
+            for sample in window
+            if sample.heart_rate is not None and sample.spo2 is not None
+        ]
 
-        # Baseline anomaly score calculation
-        risk_score = 0.05
-        factors: list[str] = []
+        if not valid_samples:
+            return AssessmentResult(
+                risk_score=0.0,
+                label="normal",
+                explanation="Insufficient heart rate and SpO2 data for analysis.",
+                model_version=self.version,
+            )
 
-        if feats["hr_mean"] > 130:
-            risk_score += 0.45
-            factors.append(f"mean HR elevated ({feats['hr_mean']:.0f} bpm)")
-        elif feats["hr_mean"] < 45:
-            risk_score += 0.40
-            factors.append(f"mean HR depressed ({feats['hr_mean']:.0f} bpm)")
+        latest = valid_samples[-1]
 
-        if feats["spo2_min"] < 92:
-            risk_score += 0.40
-            factors.append(f"SpO2 desaturation observed ({feats['spo2_min']:.0f}%)")
+        # Convert the backend Sample object into the analyzer's input format.
+        reading = {
+            "astronaut_id": latest.astronaut_id,
+            "timestamp": latest.recorded_at.isoformat(),
+            "heart_rate_bpm": latest.heart_rate,
+            "spo2_percent": latest.spo2,
+            "activity": "unknown",
+        }
 
-        if feats["stress_mean"] > 0.8:
-            risk_score += 0.25
-            factors.append(f"chronic stress index ({feats['stress_mean']:.2f})")
+        # Previous samples are used for trend detection.
+        recent_history = [
+            {
+                "heart_rate_bpm": sample.heart_rate,
+                "spo2_percent": sample.spo2,
+            }
+            for sample in valid_samples[:-1]
+        ]
 
-        risk_score = min(max(risk_score, 0.0), 1.0)
-        label = "anomaly" if risk_score >= 0.7 else ("warning" if risk_score >= 0.5 else "normal")
-        explanation = "; ".join(factors) if factors else "Vitals operating within nominal parameters"
+        result = analyze(
+            reading=reading,
+            recent_history=recent_history,
+        )
+
+        # The analyzer returns 0–100; the backend expects 0–1.
+        risk_score = float(result["risk_score"]) / 100.0
+
+        label_map = {
+            "low": "normal",
+            "review": "warning",
+            "critical": "anomaly",
+        }
+
+        label = label_map.get(result["risk_level"], "warning")
+
+        explanation = "; ".join(result["reasons"])
+        if not explanation:
+            explanation = result.get(
+                "action",
+                "No configured demonstration risk flags.",
+            )
 
         return AssessmentResult(
             risk_score=round(risk_score, 2),
@@ -43,3 +76,4 @@ class DefaultPredictor:
             explanation=explanation,
             model_version=self.version,
         )
+
