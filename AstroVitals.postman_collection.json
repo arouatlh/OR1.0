@@ -1,0 +1,535 @@
+{
+	"info": {
+		"_postman_id": "d0690da3-db78-435f-874f-38e2eaf8a67c",
+		"name": "AstroVitals Backend API",
+		"description": "NASA Space Apps Challenge 2026 - AstroVitals Offline-First Astronaut Health Monitoring System (FastAPI Edition).\n\nIncludes Health Probes, Milestone 1 Demo Alert, Astronaut Profiles & Mode Toggling, Telemetry Ingestion (with and without Blood Pressure), Real-time SSE Streaming, Alert Lifecycle, In-Process ML Assessments, Simulation Controls, and Ground Outbox Synchronization.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8998",
+			"type": "string"
+		},
+		{
+			"key": "astronautId",
+			"value": "astro-a",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "1. Health Probes",
+			"item": [
+				{
+					"name": "Liveness Probe (healthz)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/healthz",
+							"host": ["{{baseUrl}}"],
+							"path": ["healthz"]
+						},
+						"description": "Checks server process liveness without touching SQLite."
+					},
+					"response": []
+				},
+				{
+					"name": "Readiness Probe (readyz)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/readyz",
+							"host": ["{{baseUrl}}"],
+							"path": ["readyz"]
+						},
+						"description": "Verifies that SQLite database is connected and ready, and reports `ml_loaded: true/false` status."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "2. First Milestone (Demo Alert)",
+			"item": [
+				{
+					"name": "Get Canonical Demo Alert",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/demo/alert",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "demo", "alert"]
+						},
+						"description": "Returns the canonical simulated critical alert JSON specified in Part 6.1 for frontend dashboard verification."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "3. Astronauts",
+			"item": [
+				{
+					"name": "List Astronauts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/astronauts",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "astronauts"]
+						},
+						"description": "Lists all astronauts with their latest vital readings, open alerts count, and overall clinical status ('nominal', 'warning', 'critical')."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Astronaut Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/astronauts/{{astronautId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "astronauts", "{{astronautId}}"]
+						},
+						"description": "Fetches detailed astronaut profile with latest vitals and latest ML risk assessment."
+					},
+					"response": []
+				},
+				{
+					"name": "Toggle EVA Mode",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"mode\": \"eva\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/astronauts/{{astronautId}}/mode",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "astronauts", "{{astronautId}}", "mode"]
+						},
+						"description": "Toggles astronaut mode between 'normal' and 'eva'. Relaxing HR warning thresholds from 120 bpm to 140 bpm, and critical from 150 bpm to 170 bpm."
+					},
+					"response": []
+				},
+				{
+					"name": "Get AI Assistant Clinical Summary",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/astronauts/{{astronautId}}/summary",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "astronauts", "{{astronautId}}", "summary"]
+						},
+						"description": "Provides compact context for AI assistants: profile, latest vitals, 5-minute rolling statistics, active alerts, and model assessment."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Astronaut Telemetry History",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/astronauts/{{astronautId}}/telemetry?limit=20&offset=0&order=DESC",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "astronauts", "{{astronautId}}", "telemetry"],
+							"query": [
+								{
+									"key": "limit",
+									"value": "20",
+									"description": "Number of samples (max 500)"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								},
+								{
+									"key": "order",
+									"value": "DESC",
+									"description": "DESC or ASC"
+								},
+								{
+									"key": "from",
+									"value": "2026-11-14T00:00:00Z",
+									"disabled": true,
+									"description": "RFC 3339 timestamp"
+								},
+								{
+									"key": "to",
+									"value": "2026-11-14T23:59:59Z",
+									"disabled": true,
+									"description": "RFC 3339 timestamp"
+								}
+							]
+						},
+						"description": "Paginated historical telemetry for a specific astronaut."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Astronaut ML Assessments",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/astronauts/{{astronautId}}/assessments?limit=20&offset=0",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "astronauts", "{{astronautId}}", "assessments"],
+							"query": [
+								{
+									"key": "limit",
+									"value": "20"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								}
+							]
+						},
+						"description": "Paginated history of ML anomaly risk assessments."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "4. Telemetry Ingest & Export",
+			"item": [
+				{
+					"name": "Ingest Telemetry (Full Vitals)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"astronaut_id\": \"astro-a\",\n  \"samples\": [\n    {\n      \"client_id\": \"watch-full-001\",\n      \"recorded_at\": \"2026-11-14T10:30:00Z\",\n      \"source\": \"watch\",\n      \"heart_rate\": 72,\n      \"spo2\": 98,\n      \"systolic\": 118,\n      \"diastolic\": 76,\n      \"resp_rate\": 14,\n      \"ecg_summary\": \"sinus\",\n      \"stress_index\": 0.2\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/telemetry",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "telemetry"]
+						},
+						"description": "Ingests a batch of telemetry samples with blood pressure. Idempotent based on (astronaut_id, client_id). Returns HTTP 202 Accepted."
+					},
+					"response": []
+				},
+				{
+					"name": "Ingest Telemetry (Without Blood Pressure)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"astronaut_id\": \"astro-a\",\n  \"samples\": [\n    {\n      \"client_id\": \"tiffany-normal-demo-001\",\n      \"recorded_at\": \"2026-11-14T10:30:00Z\",\n      \"source\": \"watch\",\n      \"heart_rate\": 72,\n      \"spo2\": 98,\n      \"resp_rate\": 14,\n      \"ecg_summary\": \"sinus\",\n      \"stress_index\": 0.2\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/telemetry",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "telemetry"]
+						},
+						"description": "Ingests telemetry without systolic or diastolic blood pressure (BP is optional)."
+					},
+					"response": []
+				},
+				{
+					"name": "Ingest Telemetry (Critical Tachycardia - Triggers Alert)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"astronaut_id\": \"astro-a\",\n  \"samples\": [\n    {\n      \"client_id\": \"tach-001\",\n      \"recorded_at\": \"2026-11-14T10:31:00Z\",\n      \"source\": \"watch\",\n      \"heart_rate\": 155,\n      \"spo2\": 97\n    },\n    {\n      \"client_id\": \"tach-002\",\n      \"recorded_at\": \"2026-11-14T10:31:01Z\",\n      \"source\": \"watch\",\n      \"heart_rate\": 156,\n      \"spo2\": 96\n    },\n    {\n      \"client_id\": \"tach-003\",\n      \"recorded_at\": \"2026-11-14T10:31:02Z\",\n      \"source\": \"watch\",\n      \"heart_rate\": 158,\n      \"spo2\": 96\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/telemetry",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "telemetry"]
+						},
+						"description": "Sustains HR > 150 bpm for 3 consecutive samples, opening a Critical alert and triggering an SSE alert event."
+					},
+					"response": []
+				},
+				{
+					"name": "Export Telemetry (AI/ML Dataset)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/telemetry/export?astronaut_id=astro-a&limit=100&offset=0",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "telemetry", "export"],
+							"query": [
+								{
+									"key": "astronaut_id",
+									"value": "astro-a"
+								},
+								{
+									"key": "limit",
+									"value": "100"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								}
+							]
+						},
+						"description": "Exports sequential telemetry history in ascending chronological order for offline machine learning model training."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "5. Alerts Lifecycle",
+			"item": [
+				{
+					"name": "List Alerts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/alerts?status=open&limit=20&offset=0",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "alerts"],
+							"query": [
+								{
+									"key": "status",
+									"value": "open",
+									"description": "open | acknowledged | resolved"
+								},
+								{
+									"key": "severity",
+									"value": "critical",
+									"disabled": true,
+									"description": "info | warning | critical"
+								},
+								{
+									"key": "astronaut_id",
+									"value": "astro-a",
+									"disabled": true
+								},
+								{
+									"key": "limit",
+									"value": "20"
+								},
+								{
+									"key": "offset",
+									"value": "0"
+								}
+							]
+						},
+						"description": "Lists paginated alerts with filtering by status, severity, and astronaut."
+					},
+					"response": []
+				},
+				{
+					"name": "Acknowledge Alert",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/alerts/:alert_id/ack",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "alerts", ":alert_id", "ack"],
+							"variable": [
+								{
+									"key": "alert_id",
+									"value": "01JD8Z3K6Q9X2V4N7M1B5C8R0T",
+									"description": "Alert ID to acknowledge"
+								}
+							]
+						},
+						"description": "Transitions alert status from 'open' to 'acknowledged'. Returns 409 Conflict if already resolved."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "6. ML Risk Assessments",
+			"item": [
+				{
+					"name": "Submit ML Assessment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"astronaut_id\": \"astro-a\",\n  \"model_version\": \"v1.2-ecg-net\",\n  \"risk_score\": 0.88,\n  \"label\": \"arrhythmia_risk\",\n  \"explanation\": \"Elevated ST-segment variance and irregular interval pattern\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/assessments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "assessments"]
+						},
+						"description": "Submits external ML assessment score. If risk_score >= 0.8, automatically raises or updates an AI anomaly alert and broadcasts an SSE event."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "7. Real-Time Streaming (SSE)",
+			"item": [
+				{
+					"name": "Connect Live SSE Stream",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "text/event-stream"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/stream?astronaut_id={{astronautId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "stream"],
+							"query": [
+								{
+									"key": "astronaut_id",
+									"value": "{{astronautId}}",
+									"description": "Optional filter for specific astronaut"
+								}
+							]
+						},
+						"description": "Long-lived Server-Sent Events stream. Emits telemetry, alert, alert_update, and assessment events, with 15-second heartbeat pings (: ping)."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "8. Simulator Controls",
+			"item": [
+				{
+					"name": "Start Simulator (Tachycardia)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"scenario\": \"tachycardia\",\n  \"astronaut_id\": \"astro-a\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/simulate/start",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "simulate", "start"]
+						},
+						"description": "Starts telemetry simulation: ramps HR up to 155 bpm, triggers alert rules, runs in-process ML inference, and publishes SSE events."
+					},
+					"response": []
+				},
+				{
+					"name": "Start Simulator (Normal)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"scenario\": \"normal\",\n  \"astronaut_id\": \"astro-a\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/simulate/start",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "simulate", "start"]
+						},
+						"description": "Starts baseline nominal telemetry random walk."
+					},
+					"response": []
+				},
+				{
+					"name": "Stop Simulator",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/simulate/stop",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "simulate", "stop"]
+						},
+						"description": "Cancels active in-process simulation loop."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "9. Ground Outbox & Sync",
+			"item": [
+				{
+					"name": "Get Outbox Sync Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/sync/status",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "sync", "status"]
+						},
+						"description": "Reports number of pending un-synced outbox records and the timestamp of the last successful ground sync."
+					},
+					"response": []
+				},
+				{
+					"name": "Flush Outbox to Ground Station",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/sync/flush",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "sync", "flush"]
+						},
+						"description": "Transmits pending telemetry and alerts from local SQLite outbox table to remote SYNC_REMOTE_URL ground endpoint."
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}
