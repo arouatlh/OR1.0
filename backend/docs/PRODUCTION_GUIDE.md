@@ -1,8 +1,8 @@
-# AstroVitals Production & Operational Guide
+# AstroVitals Production & Operational Guide (FastAPI Edition)
 
 ## 1. Executive Architecture Overview
 
-AstroVitals is an offline-first, mission-critical astronaut health monitoring backend built with Go, net/http, Chi router, and an embedded pure-Go SQLite storage engine (`modernc.org/sqlite`). It is engineered to operate autonomously in resource-constrained, disconnected environments (e.g., spacecraft, lunar/Mars habitats, EVA suits) while guaranteeing low-latency telemetry ingestion, real-time deterministic alert rule evaluation, streaming updates via Server-Sent Events (SSE), and eventual synchronization via a local outbox.
+AstroVitals is an offline-first, mission-critical astronaut health monitoring backend built with Python 3.12+, FastAPI, Uvicorn, and an embedded SQLite storage engine (`aiosqlite`). It operates in resource-constrained, disconnected environments (spacecraft, habitat, EVA suits) while delivering low-latency telemetry ingestion, real-time deterministic alert rule evaluation, in-process CPU-bound ML anomaly assessment, streaming Server-Sent Events (SSE), and eventual outbox synchronization.
 
 ```
                               +-------------------------+
@@ -12,19 +12,25 @@ AstroVitals is an offline-first, mission-critical astronaut health monitoring ba
                                            | HTTP Ingest (POST /telemetry)
                                            v
 +-----------------------------------------------------------------------------------+
-| AstroVitals Node (Single Static Binary)                                           |
+| AstroVitals Node (FastAPI / 1 Uvicorn Worker)                                     |
 |                                                                                   |
 |  +---------------------+        +--------------------+        +----------------+  |
-|  |   Chi HTTP Router   | -----> |   Ingest Service   | -----> |   Domain Rule  |  |
-|  |  + Middlewares      |        +---------+----------+        |   Engine       |  |
-|  +---------------------+                  |                   +-------+--------+  |
-|            |                              v                           |           |
-|            |                    +--------------------+                v           |
-|            |                    |  Transactional DB  |         +--------------+   |
-|            |                    | (Telemetry+Outbox) |         | Open/Resolve |   |
-|            v                    +---------+----------+         | Alert State  |   |
-|  +---------------------+                  |                    +-------+------+   |
-|  |   SSE Event Hub     | <----------------+----------------------------+          |
+|  |   FastAPI Router    | -----> |   Ingest Service   | -----> |   Domain Rule  |  |
+|  |  + ASGIMiddleware   |        +----+----------+----+        |   Engine       |  |
+|  +---------------------+             |          |             +-------+--------+  |
+|            |                         |          v                     |           |
+|            |                         |  +--------------------+        |           |
+|            |                         |  |   In-Process ML    |        v           |
+|            |                         |  | Predictor (Thread) |  +--------------+  |
+|            |                         |  +----------+---------+  | Open/Resolve |  |
+|            |                         |             |            | Alert State  |  |
+|            |                         v             v            +-------+------+  |
+|            |                    +--------------------+                  |         |
+|            |                    | Transactional DB   | <----------------+         |
+|            |                    | (Telemetry+Outbox) |                            |
+|            v                    +---------+----------+                            |
+|  +---------------------+                  |                                       |
+|  |   SSE Event Hub     | <----------------+                                       |
 |  +----------+----------+                                                          |
 +-------------|---------------------------------------------------------------------+
               | SSE Stream (/stream)
@@ -40,142 +46,75 @@ AstroVitals is an offline-first, mission-critical astronaut health monitoring ba
 ## 2. Production Deployment & Build Requirements
 
 ### 2.1 Prerequisites
-- **Operating System:** Linux (Ubuntu 22.04+, Debian 12+, Alpine 3.19+, RHEL 9+), macOS, or Windows
-- **Go Version:** Go 1.25+ or 1.26
-- **Architecture:** `amd64`, `arm64`, or `armv7`
-- **CGO:** NOT required (`CGO_ENABLED=0`). Pure-Go SQLite via `modernc.org/sqlite`.
+- **Python Version:** Python 3.12+ (or Python 3.13)
+- **Dependency Manager:** `uv`
+- **Uvicorn Workers:** Exactly **1 worker** (`--workers 1`). The in-memory SSE hub, simulator, and write lock are in-process.
 
-### 2.2 Compilation
-To build a fully static, standalone production binary:
+### 2.2 Execution
 ```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/astrovitals cmd/server/main.go
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8998 --workers 1 --no-access-log
 ```
-The resulting binary has zero dynamic dependencies and can run on any Linux kernel version 3.2+.
 
-### 2.3 Containerization (Docker)
-A hardened, unprivileged multi-stage Docker build is provided:
+### 2.3 Docker Deployment
 ```dockerfile
-# Build stage
-FROM golang:1.25-alpine AS builder
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /astrovitals cmd/server/main.go
+FROM python:3.12-slim
 
-# Production runtime stage
-FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
-COPY --from=builder /astrovitals /app/astrovitals
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_SYSTEM_PYTHON=1
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# Install dependencies
+COPY pyproject.toml uv.lock* ./
+RUN uv pip install --system -r pyproject.toml
+
+COPY . .
+
 VOLUME ["/data"]
 ENV DB_PATH=/data/astrovitals.db
 ENV APP_ENV=prod
-ENV HTTP_ADDR=:8080
-EXPOSE 8080
-USER nonroot:nonroot
-ENTRYPOINT ["/app/astrovitals"]
-```
+ENV HTTP_HOST=0.0.0.0
+ENV HTTP_PORT=8998
 
-Run container:
-```bash
-docker run -d \
-  --name astrovitals \
-  --restart always \
-  -p 8080:8080 \
-  -v astrovitals_data:/data \
-  astrovitals:latest
+EXPOSE 8998
+USER nobody
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8998", "--workers", "1", "--no-access-log"]
 ```
 
 ---
 
 ## 3. Configuration Management
 
-Configuration is loaded from environment variables on startup. The application fails fast if configuration is malformed.
+Configuration is loaded from environment variables using `pydantic-settings`:
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `APP_ENV` | string | `dev` | `prod` (enables structured JSON logging) or `dev` (console colored log) |
-| `HTTP_ADDR` | string | `:8080` | Bind address and port for the HTTP API |
-| `DB_PATH` | string | `./data/astrovitals.db` | Absolute or relative filesystem path to the SQLite database |
-| `CORS_ORIGINS` | string | `*` | Comma-separated list of allowed origins (e.g. `https://orbit.nasa.gov,http://localhost:3000`) |
-| `ALERT_SUSTAIN_SAMPLES` | int | `3` | Number of consecutive anomaly samples required before opening an alert |
-| `ALERT_RESOLVE_SAMPLES` | int | `5` | Number of consecutive in-range samples required before auto-resolving an alert |
-| `SIM_INTERVAL_MS` | int | `1000` | Telemetry generation tick rate in milliseconds for the simulator |
-| `SYNC_REMOTE_URL` | string | `""` | Remote base URL for ground-station synchronization |
-| `API_KEY` | string | `""` | Optional shared secret; if set, requires `X-API-Key` on mutation endpoints |
+| `APP_ENV` | string | `dev` | `prod` (JSON structured logging) or `dev` (console colored log) |
+| `HTTP_HOST` | string | `0.0.0.0` | Listen host |
+| `HTTP_PORT` | int | `8998` | Listen port |
+| `DB_PATH` | string | `./data/astrovitals.db` | Filesystem path to SQLite file |
+| `CORS_ORIGINS` | string | `*` | Comma-separated allowed origins |
+| `ALERT_SUSTAIN_SAMPLES` | int | `3` | Anomaly samples required before alert opens |
+| `ALERT_RESOLVE_SAMPLES` | int | `5` | In-range samples required before alert resolves |
+| `SIM_INTERVAL_MS` | int | `1000` | Simulator tick interval |
+| `ML_ENABLED` | bool | `true` | Enable in-process ML inference |
+| `ML_WINDOW_SAMPLES` | int | `30` | Historical window size passed to predictor |
+| `ML_EVERY_N_SAMPLES` | int | `5` | Cadence of ML inference per astronaut |
+| `ML_TIMEOUT_MS` | int | `500` | Inference timeout in worker thread |
+| `ML_ALERT_THRESHOLD` | float | `0.8` | Risk score threshold to trigger AI alert |
+| `SYNC_REMOTE_URL` | string | `""` | Remote sync target URL |
+| `API_KEY` | string | `""` | Optional API key required on mutating requests |
 
 ---
 
-## 4. SQLite Storage Engine & Database Pragmas
+## 4. In-Process ML Architecture & Reliability
 
-AstroVitals configures SQLite for maximum write throughput, data safety, and concurrency:
-
-```sql
-PRAGMA journal_mode=WAL;
-PRAGMA synchronous=NORMAL;
-PRAGMA foreign_keys=ON;
-PRAGMA busy_timeout=5000;
-PRAGMA temp_store=MEMORY;
-```
-
-### Storage Considerations:
-- **Write-Ahead Logging (WAL):** Allows readers to access the database concurrently without blocking writers, and writers do not block readers.
-- **Single Writer Pool:** The write path uses a dedicated connection or serialized write transactions to prevent `SQLITE_BUSY` contention.
-- **Embedded Migrations:** Schema migrations are compiled into the binary using `embed` and applied automatically within a transaction upon server start.
-- **Disaster Recovery & Backup:** SQLite databases in WAL mode can be hot-backed up safely using standard SQLite backup APIs or by running:
-  ```bash
-  sqlite3 data/astrovitals.db ".backup data/astrovitals_backup.db"
-  ```
-
----
-
-## 5. Security & Privacy Guardrails
-
-1. **Opaque Error Model:**
-   - Client responses never expose database errors, system stack traces, or internal paths.
-   - Internal errors return HTTP 500 with a standard generic message: `"Something went wrong."`.
-2. **Zero Vital-Sign Leakage in Logs:**
-   - Production logs strictly record request metadata (`method`, `path`, `status`, `duration`, `req_id`).
-   - Telemetry payload vitals (heart rate, blood pressure, SpO2) are **never** logged under any log level.
-3. **Idempotency by Design:**
-   - Telemetry samples require a client-generated UUID/ULID (`client_id`). Duplicate submissions return HTTP 202 without creating duplicate rows or re-triggering alert pipelines.
-4. **API Key Authentication (Optional):**
-   - When `API_KEY` is set, all `POST`, `PATCH`, and `DELETE` endpoints enforce header verification (`X-API-Key`).
-
----
-
-## 6. Observability & Health Checks
-
-### Liveness Probe
-- **Endpoint:** `GET /healthz`
-- **Status:** `200 OK`
-- **Response:** `{"status":"ok"}`
-- **Usage:** Kubernetes or Docker liveness check; executes without touching SQLite.
-
-### Readiness Probe
-- **Endpoint:** `GET /readyz`
-- **Status:** `200 OK` (or `503 Service Unavailable` if database ping fails)
-- **Response:** `{"status":"ok"}`
-- **Usage:** Verifies that SQLite connection and file I/O are fully operational.
-
-### Request Correlation
-- Every incoming request is assigned or preserves an `X-Request-ID` header.
-- This ID is propagated across all log entries, SSE broadcasts, and error responses.
-
----
-
-## 7. Real-Time Streaming & Client Recovery
-
-- **Protocol:** Server-Sent Events (`text/event-stream`).
-- **Heartbeat:** Automatic comment pings (`: ping\n\n`) are broadcast every 15 seconds to keep intermediary proxies, firewalls, and satellite links alive.
-- **Backpressure Protection:** In-process subscriber channels are buffered. If a slow client fails to consume events within the buffer capacity, the subscriber is cleanly disconnected without degrading ingest throughput.
-- **Fallback:** Clients that cannot sustain SSE streams can seamlessly fall back to polling `GET /api/v1/astronauts` and `GET /api/v1/alerts`.
-
----
-
-## 8. Offline-to-Ground Synchronization (Outbox Pattern)
-
-1. Telemetry and critical alert events are inserted into the `outbox` table within the same ACID transaction as the primary entity.
-2. An autonomous background worker or manual trigger (`POST /api/v1/sync/flush`) batches un-synced outbox rows (`synced_at IS NULL`).
-3. Payload is delivered to the ground station endpoint configured via `SYNC_REMOTE_URL`.
-4. Upon HTTP 200/204 confirmation from ground, the outbox rows are stamped with `synced_at = unix_now_ms`.
+1. **Isolation:** ML inference is executed in a dedicated worker thread via `anyio.to_thread.run_sync` wrapped in `asyncio.timeout(0.5)`. The asyncio event loop is never blocked.
+2. **In-Flight Guard:** At most one inference task runs simultaneously per astronaut.
+3. **Resilience & Fallback:** If ML fails or model files are missing, the system falls back to `NullPredictor`. The backend boots and operates deterministically under rule-based alerting.
+4. **Health Reporting:** `/readyz` explicitly reports `"ml_loaded": true/false`.
