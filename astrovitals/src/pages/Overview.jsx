@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useSim, SCENARIOS } from '../store/useSim'
 import BodyTwin, { REGION_INFO } from '../components/BodyTwin'
@@ -28,10 +28,14 @@ export default function Overview() {
   const [assessment, setAssessment] = useState(null)
   const [analysisError, setAnalysisError] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
+  const [question, setQuestion] = useState('')
+  const [listening, setListening] = useState(false)
+  const [answeredQuestion, setAnsweredQuestion] = useState('')
+  const recognitionRef = useRef(null)
 
   const isBackend = mode === 'backend'
 
-  async function analyzeReadings() {
+  async function analyzeReadings(askedQuestion = '', readAloud = false) {
     if (analyzing || backendHistory.length === 0) return
 
     const readings = backendHistory.slice(-5).map(({ t, hr, spo2, rr }) => ({
@@ -43,6 +47,7 @@ export default function Overview() {
 
     setAnalyzing(true)
     setAnalysis('')
+    setAnsweredQuestion('')
     setAssessment(null)
     setAnalysisError('')
 
@@ -50,7 +55,7 @@ export default function Overview() {
       const response = await fetch('/api/v1/ai/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ readings }),
+        body: JSON.stringify({ readings, question: askedQuestion.trim() || null }),
       })
 
       const result = await response.json().catch(() => null)
@@ -67,12 +72,78 @@ export default function Overview() {
 
       setAnalysis(result.analysis)
       setAssessment(result.assessment ?? null)
+      setAnsweredQuestion(askedQuestion.trim())
+      if (readAloud) speakAnswer(result.analysis)
     } catch (error) {
       setAnalysisError(error.message)
     } finally {
       setAnalyzing(false)
     }
   }
+
+  function speakAnswer(text) {
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return
+
+    window.speechSynthesis.cancel()
+    const reply = new window.SpeechSynthesisUtterance(text)
+    reply.lang = 'en-US'
+    window.speechSynthesis.speak(reply)
+  }
+
+  function listenForQuestion() {
+    if (recognitionRef.current || analyzing || backendHistory.length === 0) return
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition
+
+    if (!SpeechRecognition) {
+      setAnalysisError('Voice input is unavailable in this browser. Type your question below.')
+      return
+    }
+
+    const recognition = new SpeechRecognition()
+    recognition.lang = 'en-US'
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+
+    recognition.onresult = (event) => {
+      const text = event.results[0][0].transcript.trim().slice(0, 300)
+      if (!text) return
+      setQuestion(text)
+      void analyzeReadings(text, true)
+    }
+
+    recognition.onerror = () => {
+      setAnalysisError('Could not capture your question. Try again or type it below.')
+    }
+
+    recognition.onend = () => {
+      recognitionRef.current = null
+      setListening(false)
+    }
+
+    try {
+      setAnalysisError('')
+      recognitionRef.current = recognition
+      setListening(true)
+      recognition.start()
+    } catch {
+      recognitionRef.current = null
+      setListening(false)
+      setAnalysisError('Could not start the microphone. You can type your question.')
+    }
+  }
+
+  useEffect(() => () => {
+    const recognition = recognitionRef.current
+    if (recognition) {
+      recognition.onresult = null
+      recognition.onerror = null
+      recognition.onend = null
+      recognition.abort()
+      recognitionRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     if (mode !== 'backend') return
@@ -211,6 +282,7 @@ export default function Overview() {
           <button
             className={!isBackend ? 'on' : ''}
             aria-pressed={!isBackend}
+            disabled={listening}
             onClick={() => setMode('simulator')}
           >
             Simulator
@@ -235,17 +307,54 @@ export default function Overview() {
             </p>
             <button
               type="button"
-              onClick={analyzeReadings}
-              disabled={analyzing || backendHistory.length === 0}
+              onClick={() => analyzeReadings()}
+              disabled={listening || analyzing || backendHistory.length === 0}
             >
               {analyzing ? 'Analyzing…' : 'Analyze readings'}
             </button>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                const text = question.trim()
+                if (text && !listening) void analyzeReadings(text)
+              }}
+            >
+              <label htmlFor="vitals-question">Ask about the demo readings</label>
+              <input
+                id="vitals-question"
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                placeholder="How did my oxygen level change?"
+                maxLength={300}
+              />
+              <div className="btns">
+                <button
+                  type="submit"
+                  disabled={listening || analyzing || !question.trim() || backendHistory.length === 0}
+                >
+                  Ask Gemini
+                </button>
+                <button
+                  type="button"
+                  onClick={listenForQuestion}
+                  disabled={listening || analyzing || backendHistory.length === 0}
+                >
+                  {listening ? 'Listening…' : 'Ask by voice'}
+                </button>
+              </div>
+            </form>
             {analysisError && <p role="alert">{analysisError}</p>}
             {analysis && (
               <p role="status">
-                <strong>Summary of submitted readings</strong><br />
+                <strong>{answeredQuestion ? 'Gemini answer' : 'Summary of submitted readings'}</strong><br />
                 {analysis}
               </p>
+            )}
+
+            {analysis && (
+              <button type="button" onClick={() => speakAnswer(analysis)}>
+                Read response aloud
+              </button>
             )}
 
             {analysis && (

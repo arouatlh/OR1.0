@@ -36,6 +36,7 @@ class DemoReading(BaseModel):
 
 class DemoAnalysisRequest(BaseModel):
     readings: list[DemoReading] = Field(min_length=1, max_length=5)
+    question: str | None = Field(default=None, max_length=300)
 
 
 class DemoAssessment(BaseModel):
@@ -89,16 +90,29 @@ def analyze_demo_readings(body: DemoAnalysisRequest) -> DemoAnalysisResponse:
             )
 
     demo_data = "\n".join(reading.model_dump_json() for reading in readings)
+    question = (body.question or "").strip()
 
-    prompt = (
-        "Summarize these simulated AstroVitals readings in at most three sentences. "
-        "Rows are ordered from oldest to newest. HR is in BPM, SpO2 is a percentage, "
-        "and RR is in breaths per minute. Report the latest row's values and say "
-        "when a measurement is missing. With multiple rows, describe any changes "
-        "shown by the supplied values. Use only the supplied data. Avoid diagnoses, "
-        "treatment advice, and risk classifications.\n\n"
-        f"{demo_data}"
-    )
+    if question:
+        instructions = (
+            "You are AstroVitals' demo assistant. Answer the user's question in "
+            "at most three short sentences using only the supplied simulated "
+            "readings. Rows are ordered oldest to newest. HR is in BPM, SpO2 "
+            "is a percentage, and RR is in breaths per minute. If the readings "
+            "do not answer the question, say which information is unavailable. "
+            "Avoid diagnoses, treatment advice, and risk classifications."
+        )
+        contents = f"Demo readings:\n{demo_data}\n\nUser question:\n{question}"
+    else:
+        instructions = (
+            "Summarize these simulated AstroVitals readings in at most three "
+            "sentences. Rows are ordered from oldest to newest. HR is in BPM, "
+            "SpO2 is a percentage, and RR is in breaths per minute. Report the "
+            "latest row's values and say when a measurement is missing. With "
+            "multiple rows, describe any changes shown by the supplied values. "
+            "Use only the supplied data. Avoid diagnoses, treatment advice, "
+            "and risk classifications."
+        )
+        contents = demo_data
 
     try:
         with genai.Client(
@@ -107,7 +121,10 @@ def analyze_demo_readings(body: DemoAnalysisRequest) -> DemoAnalysisResponse:
         ) as client:
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
-                contents=prompt,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=instructions,
+                ),
             )
     except errors.APIError as exc:
         log.warning("gemini_request_failed", code=exc.code)
@@ -124,7 +141,7 @@ def analyze_demo_readings(body: DemoAnalysisRequest) -> DemoAnalysisResponse:
 
     analysis = (response.text or "").strip()
     if not analysis:
-        raise HTTPException(status_code=502, detail="Gemini returned no summary.")
+        raise HTTPException(status_code=502, detail="Gemini returned no text.")
 
     return DemoAnalysisResponse(analysis=analysis, assessment=assessment)
 
