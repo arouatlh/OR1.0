@@ -24,8 +24,55 @@ export default function Overview() {
   const [backendHistory, setBackendHistory] = useState([])
   const [telemetryStatus, setTelemetryStatus] = useState('Loading backend readings…')
   const [refreshCount, setRefreshCount] = useState(0)
+  const [analysis, setAnalysis] = useState('')
+  const [assessment, setAssessment] = useState(null)
+  const [analysisError, setAnalysisError] = useState('')
+  const [analyzing, setAnalyzing] = useState(false)
 
   const isBackend = mode === 'backend'
+
+  async function analyzeReadings() {
+    if (analyzing || backendHistory.length === 0) return
+
+    const readings = backendHistory.slice(-5).map(({ t, hr, spo2, rr }) => ({
+      t,
+      hr,
+      spo2,
+      rr,
+    }))
+
+    setAnalyzing(true)
+    setAnalysis('')
+    setAssessment(null)
+    setAnalysisError('')
+
+    try {
+      const response = await fetch('/api/v1/ai/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ readings }),
+      })
+
+      const result = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        throw new Error(
+          result?.detail || result?.message || `Analysis failed (HTTP ${response.status})`,
+        )
+      }
+
+      if (typeof result?.analysis !== 'string' || !result.analysis.trim()) {
+        throw new Error('The backend returned no analysis.')
+      }
+
+      setAnalysis(result.analysis)
+      setAssessment(result.assessment ?? null)
+    } catch (error) {
+      setAnalysisError(error.message)
+    } finally {
+      setAnalyzing(false)
+    }
+  }
 
   useEffect(() => {
     if (mode !== 'backend') return
@@ -102,42 +149,42 @@ export default function Overview() {
       animate={{ opacity: 1, y: 0 }}
     >
       <section className="card left">
-  <h2>Crew profile</h2>
-  <dl>
-    <dt>Astronaut</dt>
-    <dd>{isBackend ? ASTRONAUT_ID : 'AST-001 (demo)'}</dd>
+        <h2>Crew profile</h2>
+        <dl>
+          <dt>Astronaut</dt>
+          <dd>{isBackend ? ASTRONAUT_ID : 'AST-001 (demo)'}</dd>
 
-    <dt>Mission</dt>
-    <dd>Mars Transit (demo)</dd>
+          <dt>Mission</dt>
+          <dd>Mars Transit (demo)</dd>
 
-    {isBackend ? (
-      <>
-        <dt>Telemetry</dt>
-        <dd>{telemetryStatus}</dd>
-      </>
-    ) : (
-      <>
-        <dt>Wearable</dt>
-        <dd>
-          AV-WATCH-001 {last?.hr == null ? '· no signal' : '· connected'}
-        </dd>
+          {isBackend ? (
+            <>
+              <dt>Telemetry</dt>
+              <dd>{telemetryStatus}</dd>
+            </>
+          ) : (
+            <>
+              <dt>Wearable</dt>
+              <dd>
+                AV-WATCH-001 {last?.hr == null ? '· no signal' : '· connected'}
+              </dd>
 
-        <dt>Earth link</dt>
-        <dd>{offline ? 'Lost, operating locally' : 'Nominal'}</dd>
-      </>
-    )}
-  </dl>
+              <dt>Earth link</dt>
+              <dd>{offline ? 'Lost, operating locally' : 'Nominal'}</dd>
+            </>
+          )}
+        </dl>
 
-  {!isBackend && (
-    <>
-      <h2>Crew-state assessment</h2>
-      <p className={`state ${stateClass}`}>{state}</p>
-      <p className="meta">
-        Illustrative demo assessment. Not a diagnosis or EVA medical clearance.
-      </p>
-    </>
-  )}
-</section>
+        {!isBackend && (
+          <>
+            <h2>Crew-state assessment</h2>
+            <p className={`state ${stateClass}`}>{state}</p>
+            <p className="meta">
+              Illustrative demo assessment. Not a diagnosis or EVA medical clearance.
+            </p>
+          </>
+        )}
+      </section>
 
       <section className="card center">
         <BodyTwin />
@@ -179,6 +226,49 @@ export default function Overview() {
         {VITALS.map((vital) => (
           <Vital key={vital.k} {...vital} history={history} />
         ))}
+
+        {isBackend && (
+          <div className="card">
+            <h2>AI Analysis</h2>
+            <p className="meta">
+              Sends up to five recent readings to Gemini. Use simulated demo readings here.
+            </p>
+            <button
+              type="button"
+              onClick={analyzeReadings}
+              disabled={analyzing || backendHistory.length === 0}
+            >
+              {analyzing ? 'Analyzing…' : 'Analyze readings'}
+            </button>
+            {analysisError && <p role="alert">{analysisError}</p>}
+            {analysis && (
+              <p role="status">
+                <strong>Summary of submitted readings</strong><br />
+                {analysis}
+              </p>
+            )}
+
+            {analysis && (
+              <div>
+                <h3>Rule-based demo assessment</h3>
+                {assessment ? (
+                  <>
+                    <p>Risk level: <strong>{assessment.risk_level}</strong></p>
+                    {assessment.reasons?.length > 0 && (
+                      <ul>
+                        {assessment.reasons.map((reason, index) => (
+                          <li key={index}>{reason}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <p>Assessment unavailable for this reading.</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="card bottom">
